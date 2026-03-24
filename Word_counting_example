@@ -1,0 +1,19 @@
+from pyspark.sql import SparkSession
+
+spark = SparkSession.builder.appName("WordCount").master("local[*]").getOrCreate()
+sc = spark.sparkContext
+
+paragraph = """Python Lists allow us to hold items of heterogeneous types. In this article, we will learn how to create a list in Python; access the list items; find the number of items in the list, how to add an item to list; how to remove an item from the list; loop through list items; sorting a list, reversing a list; and many more transformation and aggregation actions on Python Lists."""
+
+rdd_para = sc.parallelize([paragraph])
+
+word_count_rdd = rdd_para \
+    .flatMap(lambda line: line.replace(".", "")
+                           .replace(",", "")
+                           .replace(";", "")
+                           .split()) \
+    .map(lambda word: (word, 1)) \
+    .reduceByKey(lambda a, b: a + b)
+
+for item in word_count_rdd.collect():
+    print(item)

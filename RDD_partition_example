@@ -1,0 +1,14 @@
+from pyspark.sql import SparkSession
+
+spark = SparkSession.builder \
+    .appName("Assignment") \
+    .master("local[*]") \
+    .getOrCreate()
+
+sc = spark.sparkContext
+
+data = [1,2,3,4,5,6,7,8,9,10,11,12]
+
+rdd = sc.parallelize(data, 5)
+
+print("Number of partitions:", rdd.getNumPartitions())

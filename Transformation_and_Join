@@ -1,0 +1,95 @@
+from pyspark.sql import SparkSession
+from pyspark.sql.functions import (
+    col, when, lit, upper, trim, current_date,
+    datediff, to_date, round, sum as _sum, count
+)
+
+# Start Spark session
+spark = SparkSession.builder.appName("DataTransformationExample").getOrCreate()
+
+# Sample data
+data = [
+    (1, " alice ", "electronics", 1200.50, "2026-03-01", "yes"),
+    (2, "bob", "furniture", 850.00, "2026-03-05", "no"),
+    (3, None, "electronics", None, "2026-03-10", "yes"),
+    (4, "Charlie", "clothing", 400.75, "2026-03-15", None),
+]
+
+columns = ["customer_id", "customer_name", "category", "amount", "order_date", "is_active"]
+
+df = spark.createDataFrame(data, columns)
+
+# Another lookup DataFrame for join
+region_data = [
+    (1, "North"),
+    (2, "South"),
+    (3, "East"),
+    (4, "West")
+]
+region_df = spark.createDataFrame(region_data, ["customer_id", "region"])
+
+# -----------------------------
+# Data Transformation Steps
+# -----------------------------
+
+transformed_df = (
+    df
+    # Trim and standardize customer_name
+    .withColumn("customer_name", trim(col("customer_name")))
+    .withColumn(
+        "customer_name",
+        when(col("customer_name").isNull(), lit("UNKNOWN"))
+        .otherwise(upper(col("customer_name")))
+    )
+    
+    # Fill null amount with 0
+    .withColumn(
+        "amount",
+        when(col("amount").isNull(), lit(0.0)).otherwise(col("amount"))
+    )
+    
+    # Convert order_date to date type
+    .withColumn("order_date", to_date(col("order_date"), "yyyy-MM-dd"))
+    
+    # Create active_flag column
+    .withColumn(
+        "active_flag",
+        when(col("is_active") == "yes", lit(1))
+        .otherwise(lit(0))
+    )
+    
+    # Create amount_category column
+    .withColumn(
+        "amount_category",
+        when(col("amount") >= 1000, lit("HIGH"))
+        .when(col("amount") >= 500, lit("MEDIUM"))
+        .otherwise(lit("LOW"))
+    )
+    
+    # Days since order
+    .withColumn("days_since_order", datediff(current_date(), col("order_date")))
+    
+    # Rename category column
+    .withColumnRenamed("category", "product_category")
+)
+
+# Join with region lookup
+final_df = transformed_df.join(region_df, on="customer_id", how="left")
+
+# Aggregate by product_category and region
+summary_df = (
+    final_df
+    .groupBy("product_category", "region")
+    .agg(
+        round(_sum("amount"), 2).alias("total_sales"),
+        count("*").alias("order_count")
+    )
+    .orderBy("product_category", "region")
+)
+
+# Show results
+print("Transformed Data:")
+final_df.show(truncate=False)
+
+print("Summary Data:")
+summary_df.show(truncate=False)

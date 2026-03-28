@@ -1,0 +1,165 @@
+from pyspark.sql import SparkSession
+from pyspark.sql.types import (
+    StructType, StructField, IntegerType, StringType, DoubleType
+)
+from pyspark.sql.functions import (
+    col, trim, upper, initcap, to_date, when, round, lit
+)
+
+# --------------------------------------------------
+# 1. Spark Session Creation
+# --------------------------------------------------
+spark = SparkSession.builder \
+    .appName("PySpark Schema Transform SQL Example") \
+    .getOrCreate()
+
+# --------------------------------------------------
+# 2. Schema definition
+# --------------------------------------------------
+schema = StructType([
+    StructField("order_id", IntegerType(), False),
+    StructField("customer_name", StringType(), True),
+    StructField("product", StringType(), True),
+    StructField("order_date", StringType(), True),   # raw string, will convert later
+    StructField("quantity", IntegerType(), True),
+    StructField("unit_price", DoubleType(), True),
+    StructField("discount_pct", DoubleType(), True),
+    StructField("city", StringType(), True)
+])
+
+# --------------------------------------------------
+# 3. Input data
+# --------------------------------------------------
+data = [
+    (101, "  Alice   ", "Laptop",   "2026-03-01", 2, 750.0, 10.0, "New York"),
+    (102, "Bob",        "Mouse",    "2026-03-02", 5, 25.0,  None, " Chicago "),
+    (103, "Charlie",    "Keyboard", "2026-03-03", None, 45.0, 5.0, "Dallas"),
+    (104, None,         "Monitor",  "2026-03-03", 1, None,  15.0, "Seattle"),
+    (105, "Eve",        "Mouse",    "bad-date",   3, 20.0,  50.0, "Boston"),
+    (106, " Frank ",    None,       "2026-03-04", 4, 15.0,  -5.0, "Miami")
+]
+
+df_raw = spark.createDataFrame(data, schema)
+
+print("Raw Data:")
+df_raw.show(truncate=False)
+df_raw.printSchema()
+
+# --------------------------------------------------
+# 4. Cleaning and Transforming Data
+# --------------------------------------------------
+df_clean = (
+    df_raw
+    # Clean text columns
+    .withColumn("customer_name", initcap(trim(col("customer_name"))))
+    .withColumn("product", upper(trim(col("product"))))
+    .withColumn("city", initcap(trim(col("city"))))
+
+    # Convert order_date string to proper date
+    .withColumn("order_date", to_date(col("order_date"), "yyyy-MM-dd"))
+
+    # Fill missing values
+    .fillna({
+        "customer_name": "Unknown",
+        "product": "UNKNOWN",
+        "quantity": 1,
+        "unit_price": 0.0,
+        "discount_pct": 0.0,
+        "city": "Unknown"
+    })
+
+    # Fix invalid discount values
+    .withColumn(
+        "discount_pct",
+        when((col("discount_pct") < 0) | (col("discount_pct") > 100), 0.0)
+        .otherwise(col("discount_pct"))
+    )
+
+    # Remove bad dates
+    .filter(col("order_date").isNotNull())
+
+    # Add derived columns
+    .withColumn("gross_amount", round(col("quantity") * col("unit_price"), 2))
+    .withColumn(
+        "discount_amount",
+        round(col("gross_amount") * col("discount_pct") / 100, 2)
+    )
+    .withColumn(
+        "net_amount",
+        round(col("gross_amount") - col("discount_amount"), 2)
+    )
+
+    # Optional business rule: keep only rows with positive quantity
+    .filter(col("quantity") > 0)
+)
+
+print("Cleaned and Transformed Data:")
+df_clean.show(truncate=False)
+df_clean.printSchema()
+
+df_clean.createOrReplaceTempView("clean_orders")
+
+# --------------------------------------------------
+# 5. Running SQL queries on cleaned data
+# --------------------------------------------------
+
+# Query 1: Total revenue by product
+query1 = """
+SELECT
+    product,
+    SUM(quantity) AS total_qty,
+    ROUND(SUM(net_amount), 2) AS total_revenue
+FROM clean_orders
+GROUP BY product
+ORDER BY total_revenue DESC
+"""
+
+print("Revenue by Product:")
+spark.sql(query1).show()
+
+# Query 2: Average net amount by city
+query2 = """
+SELECT
+    city,
+    ROUND(AVG(net_amount), 2) AS avg_net_amount
+FROM clean_orders
+GROUP BY city
+ORDER BY avg_net_amount DESC
+"""
+
+print("Average Net Amount by City:")
+spark.sql(query2).show()
+
+# Query 3: Orders with net amount greater than 100
+query3 = """
+SELECT
+    order_id,
+    customer_name,
+    product,
+    order_date,
+    net_amount
+FROM clean_orders
+WHERE net_amount > 100
+ORDER BY net_amount DESC
+"""
+
+print("High Value Orders:")
+spark.sql(query3).show()
+
+# Query 4: Count orders by order_date
+query4 = """
+SELECT
+    order_date,
+    COUNT(*) AS num_orders
+FROM clean_orders
+GROUP BY order_date
+ORDER BY order_date
+"""
+
+print("Orders per Day:")
+spark.sql(query4).show()
+
+# --------------------------------------------------
+# Stop Spark session
+# --------------------------------------------------
+spark.stop()

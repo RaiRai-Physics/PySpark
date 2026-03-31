@@ -3,7 +3,7 @@ from pyspark.sql import SparkSession, functions as F
 spark = SparkSession.builder.getOrCreate()
 
 # ----------------------------
-# 1) Messy source data
+# 1) Source data
 # ----------------------------
 orders_data = [
     (1, " Alice ", " NY ", [" Books", "tech ", None], " 120.50 "),
@@ -17,7 +17,7 @@ orders_df = spark.createDataFrame(
     ["order_id", "customer_name", "state_code", "tags", "amount_raw"]
 )
 
-# Tiny lookup table -> good candidate for broadcast join
+# Lookup table for broadcast join
 state_lookup_data = [
     ("ny", "New York"),
     ("ca", "California"),
@@ -30,7 +30,7 @@ state_df = spark.createDataFrame(
 )
 
 # ----------------------------
-# 2) Clean lookup keys first
+# 2) Cleaning lookup keys first
 # ----------------------------
 state_df = (
     state_df
@@ -38,7 +38,7 @@ state_df = (
 )
 
 # ----------------------------
-# 3) Clean main data
+# 3) Cleaning main data
 # ----------------------------
 cleaned_orders = (
     orders_df
@@ -102,7 +102,7 @@ final_df = (
 )
 
 # ----------------------------
-# 5) Example result
+# 5) Sample result
 # ----------------------------
 final_df.show(truncate=False)
 

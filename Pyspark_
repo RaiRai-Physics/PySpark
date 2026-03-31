@@ -1,0 +1,117 @@
+from pyspark.sql import SparkSession, functions as F
+
+spark = SparkSession.builder.getOrCreate()
+
+# ----------------------------
+# 1) Messy source data
+# ----------------------------
+orders_data = [
+    (1, " Alice ", " NY ", [" Books", "tech ", None], " 120.50 "),
+    (2, "BOB", "ca", ["home", "HOME ", ""], None),
+    (3, None, " tx ", None, "89"),
+    (4, "  eve", None, [" beauty ", "tech"], "bad_data"),
+]
+
+orders_df = spark.createDataFrame(
+    orders_data,
+    ["order_id", "customer_name", "state_code", "tags", "amount_raw"]
+)
+
+# Tiny lookup table -> good candidate for broadcast join
+state_lookup_data = [
+    ("ny", "New York"),
+    ("ca", "California"),
+    ("tx", "Texas"),
+]
+
+state_df = spark.createDataFrame(
+    state_lookup_data,
+    ["state_code", "state_name"]
+)
+
+# ----------------------------
+# 2) Clean lookup keys first
+# ----------------------------
+state_df = (
+    state_df
+    .withColumn("state_code", F.lower(F.trim(F.col("state_code"))))
+)
+
+# ----------------------------
+# 3) Clean main data
+# ----------------------------
+cleaned_orders = (
+    orders_df
+    # customer_name: trim spaces, standardize case, fill nulls
+    .withColumn(
+        "customer_name",
+        F.when(
+            F.col("customer_name").isNull(),
+            F.lit("Unknown")
+        ).otherwise(F.initcap(F.trim(F.col("customer_name"))))
+    )
+
+    # state_code: normalize join key
+    .withColumn("state_code", F.lower(F.trim(F.col("state_code"))))
+
+    # amount_raw -> amount
+    # keep only digits and decimal point, then cast to double
+    .withColumn(
+        "amount_clean",
+        F.regexp_replace(
+            F.trim(F.coalesce(F.col("amount_raw"), F.lit(""))),
+            r"[^0-9.]",
+            ""
+        )
+    )
+    .withColumn(
+        "amount",
+        F.when(F.col("amount_clean") == "", None)
+         .otherwise(F.col("amount_clean").cast("double"))
+    )
+    .drop("amount_clean", "amount_raw")
+
+    # explode tags into one row per tag
+    .withColumn("tag", F.explode_outer(F.col("tags")))
+    .drop("tags")
+
+    # normalize tag text
+    .withColumn("tag", F.lower(F.trim(F.col("tag"))))
+
+    # remove junk tags
+    .filter(F.col("tag").isNotNull() & (F.col("tag") != ""))
+
+    # optional: remove duplicate tags within the same order after cleaning
+    .dropDuplicates(["order_id", "tag"])
+)
+
+# ----------------------------
+# 4) Broadcast join with lookup
+# ----------------------------
+final_df = (
+    cleaned_orders
+    .join(F.broadcast(state_df), on="state_code", how="left")
+    .select(
+        "order_id",
+        "customer_name",
+        "state_code",
+        "state_name",
+        "tag",
+        "amount"
+    )
+)
+
+# ----------------------------
+# 5) Example result
+# ----------------------------
+final_df.show(truncate=False)
+
+# Small summary
+summary_df = (
+    final_df
+    .groupBy("state_name", "tag")
+    .agg(F.countDistinct("order_id").alias("order_count"))
+    .orderBy("state_name", "tag")
+)
+
+summary_df.show(truncate=False)
